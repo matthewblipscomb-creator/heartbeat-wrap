@@ -44,6 +44,15 @@ heartbeat_wrap.sh [OPTIONS] -- <command> [args...]
 | `--label NAME` | Tag every heartbeat/status line with `NAME`, so you can tell concurrent wrapped jobs apart |
 | `--status-file PATH` | Also write the latest heartbeat (and final DONE/FAILED state) to `PATH`, overwritten each beat — `tail -f` it from another pane at any time |
 | `--fun` | Rotate through a few varied "still here" phrasings instead of repeating the same line every time |
+| `--message TEXT` | Use `TEXT` as the heartbeat phrase instead of the default (or `--fun` rotation) — takes priority over `--fun` if both are given. The elapsed time/pid suffix is still appended automatically |
+| `--stuck-detect` | Watch the wrapped command's CPU time (via `ps`) and print an extra "possibly stuck" warning if it hasn't advanced for `--stuck-threshold` consecutive beats. Heuristic, not proof — a command can be idle-CPU but legitimately waiting on slow disk/network I/O |
+| `--stuck-threshold N` | Consecutive idle beats before warning (used with `--stuck-detect`). Default: `3` |
+| `--history` | Log this run (label, command, start/end time, elapsed seconds, exit code, whether a stuck warning ever fired) to a local SQLite database for later review. Silently skipped if the `sqlite3` CLI isn't installed |
+| `--history-db PATH` | Path to the SQLite history DB (implies `--history`). Default: `~/.heartbeat_wrap/history.db` |
+| `--no-dashboard` | Skip writing a live job-registry snapshot to `~/.heartbeat_wrap/jobs/`. By default every run writes/updates one so the companion local dashboard (see below) can list it. Purely local, no network calls |
+| `--webhook URL` | POST a JSON payload to `URL` when the wrapped command finishes (DONE or FAILED). Requires `curl`; a delivery failure (missing curl, network error, non-2xx) is only ever printed as a warning — it never affects the wrapped command's exit code |
+| `--webhook-format FMT` | Shape of the JSON payload sent to `--webhook`. One of `generic` (full JSON snapshot, default), `slack` (single `text` field, Slack incoming-webhook compatible), `discord` (single `content` field, Discord webhook compatible) |
+| `--webhook-on-stuck` | Also POST to `--webhook` every time a "possibly stuck" warning fires (requires `--stuck-detect` too — this flag alone does nothing) |
 | `-h`, `--help` | Show usage |
 
 **Always include a literal `--`** before your real command, so this
@@ -67,6 +76,13 @@ heartbeat_wrap.sh --interval 30 --immediate \
 
 # Any arbitrarily slow command, with terminal bell + fun rotating messages
 heartbeat_wrap.sh --bell --fun -- rsync -av ./big-folder/ /Volumes/Backup/
+
+# Custom heartbeat message instead of the default/fun phrasing
+heartbeat_wrap.sh --message "brewing coffee, hang tight" -- ./run_migrations.sh
+
+# Watch for real hangs (not just "slow"), and keep a permanent local
+# record of every run for later review
+heartbeat_wrap.sh --stuck-detect --history -- ./run_migrations.sh
 ```
 
 ### Sample output
@@ -87,6 +103,88 @@ The wrapped command's real output/exit code are preserved and printed
 once it completes — `heartbeat_wrap.sh` just adds visibility while you
 wait.
 
+## Local dashboard
+
+Every run (unless started with `--no-dashboard`) writes a small JSON
+snapshot of itself to `~/.heartbeat_wrap/jobs/job_<start_ts>_<pid>.json`
+and keeps it updated on every heartbeat. `dashboard/heartbeat_dashboard.py`
+is a tiny, zero-dependency (Python 3 stdlib only) local web server that
+reads that directory and shows **every** wrapped job across every
+terminal/tab on the machine, live, in a browser — no need to remember
+which pane a long job is running in or tail individual status files.
+
+```bash
+python3 dashboard/heartbeat_dashboard.py --port 8787
+# then open http://localhost:8787/ in a browser - it polls every 2s
+```
+
+The page shows each job's state (RUNNING / STALE / DONE / FAILED), label,
+command, host, PID, elapsed time, and exit code. `STALE` means the
+process is gone but the registry file was never updated to a final
+state — almost always because it was killed with `-9`/`SIGKILL` or the
+machine slept/crashed mid-run. Nothing here ever leaves your machine;
+it's a pure local file-read, no network calls beyond `localhost`.
+
+## Run history (SQLite)
+
+Pass `--history` (or `--history-db PATH` to pick a custom location) to
+log every run — label, command, start/end time, elapsed seconds, exit
+code, and whether a `--stuck-detect` warning ever fired — to a local
+SQLite database (default `~/.heartbeat_wrap/history.db`). Silently
+skipped with a warning if the `sqlite3` CLI isn't installed; never
+blocks or fails the wrapped command itself.
+
+```bash
+heartbeat_wrap.sh --history -- ./run_migrations.sh
+# ...later:
+sqlite3 ~/.heartbeat_wrap/history.db "SELECT label, command, elapsed_seconds, exit_code FROM runs ORDER BY start_ts DESC LIMIT 10;"
+```
+
+## Remote/team notifications (webhooks)
+
+Pass `--webhook URL` to get a JSON POST when the wrapped command finishes
+(DONE or FAILED) — useful for Slack/Discord channel pings, a teammate's
+monitoring endpoint, or your own automation, without needing to be at the
+terminal (or even on the same machine) when a long job wraps up.
+
+```bash
+# Generic JSON payload (default) - full state snapshot
+heartbeat_wrap.sh --webhook https://example.com/hooks/heartbeat -- ./run_migrations.sh
+
+# Slack incoming webhook - payload shaped as {"text": "..."}
+heartbeat_wrap.sh --webhook "$SLACK_WEBHOOK_URL" --webhook-format slack -- ./run_migrations.sh
+
+# Discord webhook - payload shaped as {"content": "..."}
+heartbeat_wrap.sh --webhook "$DISCORD_WEBHOOK_URL" --webhook-format discord -- ./run_migrations.sh
+
+# Also get pinged the moment a stuck-warning fires, not just at the end
+heartbeat_wrap.sh --stuck-detect --webhook "$SLACK_WEBHOOK_URL" \
+    --webhook-format slack --webhook-on-stuck -- ./run_migrations.sh
+```
+
+The `generic` format's full payload looks like:
+
+```json
+{
+  "event": "finished",
+  "job_id": "1783097947_24292",
+  "label": "migration",
+  "command": "./run_migrations.sh",
+  "host": "my-macbook.local",
+  "pid": 24292,
+  "state": "DONE",
+  "elapsed_seconds": 9,
+  "exit_code": 0,
+  "message": "Command finished after 00:09 with exit code 0"
+}
+```
+
+`event` is `"finished"` for the completion POST or `"stuck"` for a
+stuck-warning POST (only sent if `--webhook-on-stuck` is also passed).
+Delivery uses a 10-second `curl` timeout and never blocks or fails the
+wrapped command itself — a dead/unreachable webhook endpoint only ever
+prints a warning to stderr.
+
 ## Install
 
 There's nothing to install. Just download `heartbeat_wrap.sh`, make it
@@ -100,6 +198,10 @@ chmod +x heartbeat_wrap.sh
 Optionally drop it somewhere on your `PATH` (e.g. `/usr/local/bin/`) to
 call it from anywhere as just `heartbeat_wrap.sh`.
 
+To remove everything later (the PATH copy, if any, plus the local
+`~/.heartbeat_wrap/` data directory used by the dashboard/history), run
+`./uninstall.sh` (asks for confirmation first; pass `--yes` to skip that).
+
 ## Compatibility
 
 - macOS (bash 3.2+, the default shipped version) — tested
@@ -107,6 +209,8 @@ call it from anywhere as just `heartbeat_wrap.sh`.
   `notify-send` if present
 - Uses `mktemp -t heartbeat_wrap.XXXXXX`, which is compatible with both
   BSD/macOS and GNU/Linux `mktemp` implementations
+- The dashboard requires only Python 3 (stdlib `http.server`/`json`) —
+  no `pip install` needed
 
 ## License
 
@@ -117,30 +221,25 @@ no paywall, no telemetry.
 ## Roadmap / Pro tier ideas
 
 The free script above intentionally stays a single dependency-free bash
-file — that's the whole appeal. Anything below is being considered for a
+file — that's the whole appeal. **Local dashboard, run history/analytics,
+smart stuck-detection, and remote/team webhook notifications (Slack,
+Discord, generic JSON) have all shipped** in the free script/companion
+dashboard above. What's left below is still being considered for a
 **separate, optional companion product** (working name: `heartbeat_wrap
 Pro`), not gating features out of the free script:
 
-- **Remote/team notifications** — Slack, Discord, or generic webhook
-  pings instead of (or in addition to) local desktop notifications, so a
-  teammate (or you, away from your desk) knows a long CI/migration/agent
-  job finished or failed.
-- **Local dashboard** — a lightweight menu-bar app (macOS) or small local
-  web UI listing every currently-running wrapped job across all terminals,
-  with live elapsed time, without needing to tail individual status files.
-- **Run history & analytics** — log every wrapped run's command, duration,
-  and exit code to a local SQLite file; surface trends like "your
-  migrations have been getting slower" or "this grep pattern usually takes
-  ~40s, this run is already at 3 minutes — maybe *is* stuck this time."
-- **Smart stuck-detection** — beyond a fixed timer, watch child CPU/IO
-  activity and flag jobs that look truly idle (zero CPU, zero disk I/O)
-  vs. ones that are heartbeat-visible but legitimately grinding away.
 - **Agent/CI native integration** — a small MCP server or CI plugin that
   auto-wraps every long shell step an AI agent or pipeline runs, so this
   becomes automatic instead of something you have to remember to type.
+
 - **Cross-platform native notifications** — Windows support (currently
   macOS/Linux only) via `msg`/toast notifications for WSL and native
   Windows terminals.
+- **History analytics/trends** — the `--history` SQLite log above is
+  currently just raw storage; a `heartbeat_wrap_report.py`-style tool
+  that surfaces trends ("your migrations have been getting slower", "this
+  grep pattern usually takes ~40s, this run is already at 3 minutes —
+  maybe *is* stuck this time") on top of it is still an open idea.
 
 None of this is committed or funded yet — it's a backlog of ideas from
 treating this as a real product, not just a script. Feedback/PRs on which
