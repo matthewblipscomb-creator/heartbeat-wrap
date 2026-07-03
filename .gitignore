@@ -1,0 +1,3 @@
+*.status
+*.log
+.DS_Store
