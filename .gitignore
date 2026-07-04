@@ -1,3 +1,4 @@
 *.status
 *.log
 .DS_Store
+.git_commit_msg.txt

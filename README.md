@@ -221,29 +221,30 @@ no paywall, no telemetry.
 ## Roadmap / Pro tier ideas
 
 The free script above intentionally stays a single dependency-free bash
-file — that's the whole appeal. **Local dashboard, run history/analytics,
-smart stuck-detection, and remote/team webhook notifications (Slack,
+file — that's the whole appeal. **Local dashboard, run history/analytics
+(including trend analysis via `heartbeat_wrap_report.py`), smart
+stuck-detection, cross-platform notifications (macOS/Linux/Windows via
+WSL/Git Bash/MSYS2/Cygwin), and remote/team webhook notifications (Slack,
 Discord, generic JSON) have all shipped** in the free script/companion
-dashboard above. What's left below is still being considered for a
+tools above. What's left below is still being considered for a
 **separate, optional companion product** (working name: `heartbeat_wrap
 Pro`), not gating features out of the free script:
 
-- **Agent/CI native integration** — a small MCP server or CI plugin that
-  auto-wraps every long shell step an AI agent or pipeline runs, so this
-  becomes automatic instead of something you have to remember to type.
-
-- **Cross-platform native notifications** — Windows support (currently
-  macOS/Linux only) via `msg`/toast notifications for WSL and native
-  Windows terminals.
-- **History analytics/trends** — the `--history` SQLite log above is
-  currently just raw storage; a `heartbeat_wrap_report.py`-style tool
-  that surfaces trends ("your migrations have been getting slower", "this
-  grep pattern usually takes ~40s, this run is already at 3 minutes —
-  maybe *is* stuck this time") on top of it is still an open idea.
+- **Agent/CI native integration** — ✅ **shipped** as a small MCP server
+  (`Cline/MCP/heartbeat-wrap-server/`) that exposes `start_heartbeat_job`,
+  `check_heartbeat_job`, `wait_for_heartbeat_job`, and `list_heartbeat_jobs`
+  as MCP tools. This lets an AI coding agent (e.g. Cline) start a
+  long-running command in the background and return immediately with a
+  `job_id`, then poll it non-blockingly instead of holding a terminal
+  hostage for the whole duration — exactly the workflow this whole project
+  was originally built to support by hand. A general CI-plugin form (e.g.
+  a GitHub Actions step) is still just an idea and not built yet.
 
 None of this is committed or funded yet — it's a backlog of ideas from
 treating this as a real product, not just a script. Feedback/PRs on which
 of these would actually be worth paying for are welcome.
+
+
 
 ## Support this project
 

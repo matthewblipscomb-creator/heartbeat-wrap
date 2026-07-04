@@ -185,6 +185,16 @@ WEBHOOK_FORMAT="generic"
 WEBHOOK_ON_STUCK=0
 WEBHOOK_ON_HISTORY_WARN=0
 
+# Declared here (not near their first real use in beat()) specifically so
+# a SIGINT/SIGTERM trap firing very early - before beat() has ever run -
+# can still safely reference EVER_STUCK under `set -u` without an
+# "unbound variable" error inside the trap handler itself.
+LAST_CPU_SECONDS=""
+IDLE_BEATS=0
+EVER_STUCK=0
+INTERRUPTED_HANDLED=0
+
+
 
 
 
@@ -480,7 +490,105 @@ json_escape() {
   printf '%s' "$s"
 }
 
+# Writes one row to the --history SQLite DB (label, command, start/end
+# time, elapsed seconds, exit code, whether a stuck warning ever fired).
+# Shared by both the normal DONE/FAILED completion path AND the
+# SIGINT/SIGTERM cleanup_on_signal() handler below, so an interrupted run
+# gets logged the same way a normal one does instead of just vanishing
+# from history. No-op if --history wasn't requested; silently skipped
+# (with a one-time warning) if the sqlite3 CLI isn't installed - never
+# allowed to affect the wrapped command's own exit code.
+log_history() {
+  local exit_code="$1" elapsed="$2" end_ts="$3" ever_stuck="$4"
+  [[ "$HISTORY" -eq 1 ]] || return
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    echo "${TAG} --history requested but 'sqlite3' CLI not found - skipping history logging." >&2
+    return
+  fi
+  mkdir -p "$(dirname "$HISTORY_DB")" 2>/dev/null
+  # SQLite quoting: double any single quotes in free-text fields.
+  local escaped_cmd escaped_label
+  escaped_cmd="$(printf '%s' "$ORIGINAL_CMD" | sed "s/'/''/g")"
+  escaped_label="$(printf '%s' "$LABEL" | sed "s/'/''/g")"
+  sqlite3 "$HISTORY_DB" <<SQL 2>/dev/null
+CREATE TABLE IF NOT EXISTS runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  label TEXT,
+  command TEXT,
+  start_ts INTEGER,
+  end_ts INTEGER,
+  elapsed_seconds INTEGER,
+  exit_code INTEGER,
+  stuck_detected INTEGER
+);
+INSERT INTO runs (label, command, start_ts, end_ts, elapsed_seconds, exit_code, stuck_detected)
+VALUES ('${escaped_label}', '${escaped_cmd}', ${START_TS}, ${end_ts}, ${elapsed}, ${exit_code}, ${ever_stuck});
+SQL
+  echo "${TAG} Run logged to history: ${HISTORY_DB}"
+}
+
+# Handles SIGINT (Ctrl-C) / SIGTERM sent to heartbeat_wrap.sh itself while
+# it's waiting on the wrapped command. Without this, hitting Ctrl-C to
+# stop watching heartbeats either silently orphaned the real wrapped
+# command in the background (still running, no more heartbeats, no way
+# to tell) or left LOG_FILE/the registry's job_*.json stuck in "RUNNING"
+# forever (only ever cleared out a day later by prune_registry's mtime
+# check) - a dangling-resource bug with the exact same "silently leaves
+# a mess behind" flavor as the shell hangs this whole project's
+# .clinerules already catalogs at length.
+#
+# On interrupt: stop the real wrapped command (TERM, then KILL after a
+# 1s grace period if it ignored that), mark status file/registry/history
+# as INTERRUPTED (a new, explicit state - not lumped in with FAILED) so
+# the dashboard and history report can tell "I stopped this on purpose"
+# apart from "it exited with a real error code", fire the webhook if
+# configured, clean up the temp log file, then exit with the conventional
+# 128+signum code (130 for INT, 143 for TERM) so callers/CI can still
+# detect this was a signal-triggered stop.
+cleanup_on_signal() {
+  local sig="$1"
+  if [[ "$INTERRUPTED_HANDLED" -eq 1 ]]; then
+    # Already mid-cleanup from a first Ctrl-C; a second one just forces
+    # an immediate exit rather than re-running (and possibly tangling)
+    # the cleanup steps a second time.
+    exit 130
+  fi
+  INTERRUPTED_HANDLED=1
+
+  local now elapsed elapsed_fmt exit_code
+  now=$(date +%s)
+  elapsed=$(( now - START_TS ))
+  elapsed_fmt="$(format_elapsed "$elapsed")"
+
+  echo "" >&2
+  echo "${TAG} Caught ${sig} - stopping wrapped command (pid ${CMD_PID:-none started yet}) and cleaning up..." >&2
+
+  if [[ -n "${CMD_PID:-}" ]] && kill -0 "$CMD_PID" 2>/dev/null; then
+    kill -TERM "$CMD_PID" 2>/dev/null
+    sleep 1
+    if kill -0 "$CMD_PID" 2>/dev/null; then
+      kill -KILL "$CMD_PID" 2>/dev/null
+    fi
+  fi
+
+  write_status "${TAG} INTERRUPTED after ${elapsed_fmt} (${sig}, pid ${CMD_PID:-none})"
+  write_registry "INTERRUPTED" "$elapsed" "null"
+  send_webhook "interrupted" "Command interrupted by ${sig} after ${elapsed_fmt}" "INTERRUPTED" "$elapsed" "null"
+
+  if [[ "$sig" == "SIGINT" ]]; then
+    exit_code=130
+  else
+    exit_code=143
+  fi
+  log_history "$exit_code" "$elapsed" "$now" "$EVER_STUCK"
+
+  rm -f "${LOG_FILE:-}" 2>/dev/null
+  echo "${TAG} INTERRUPTED after ${elapsed_fmt} - exiting with code ${exit_code}." >&2
+  exit "$exit_code"
+}
+
 HOST_NAME="$(hostname 2>/dev/null || echo unknown)"
+
 
 # Best-effort cleanup of old finished-job registry snapshots so
 # ~/.heartbeat_wrap/jobs/ doesn't grow forever. Runs once per invocation,
@@ -535,8 +643,19 @@ LOG_FILE="$(mktemp -t heartbeat_wrap.XXXXXX)"
 if [[ -z "$STATUS_FILE" ]]; then
   STATUS_FILE="$(mktemp -t heartbeat_wrap_status.XXXXXX)"
 fi
+
+# Safety net: guarantees LOG_FILE is removed no matter how the script
+# exits (normal completion, an unexpected early `exit`, etc.), on top of
+# the explicit `rm -f "$LOG_FILE"` already in the normal completion path
+# below. $LOG_FILE is deliberately unquoted-at-registration (single
+# quotes below) so this picks up its actual value when the trap fires,
+# not whatever it was at registration time - it's already been set by
+# mktemp above either way.
+trap 'rm -f "$LOG_FILE" 2>/dev/null' EXIT
+
 START_TS=$(date +%s)
 prune_registry
+
 
 write_status() {
 
@@ -561,6 +680,16 @@ write_status "${TAG} RUNNING (pid ${CMD_PID}, elapsed 00:00)"
 JOB_ID="${START_TS}_${CMD_PID}"
 REGISTRY_FILE="${REGISTRY_DIR}/job_${JOB_ID}.json"
 write_registry "RUNNING" 0 null
+
+# Now that the wrapped command is actually running (CMD_PID known), wire
+# up Ctrl-C/SIGTERM handling so stopping heartbeat_wrap.sh itself also
+# stops the real command and leaves a clean INTERRUPTED record behind
+# instead of an orphaned background process + a registry entry stuck in
+# "RUNNING" forever. See cleanup_on_signal()'s own comment above for the
+# full rationale.
+trap 'cleanup_on_signal SIGINT' INT
+trap 'cleanup_on_signal SIGTERM' TERM
+
 
 # --history-compare: fetch the historical baseline (avg elapsed seconds +
 # run count) for this --label ONCE, right after the wrapped command
@@ -598,12 +727,8 @@ if [[ "$HISTORY_COMPARE" -eq 1 ]]; then
 fi
 HISTORY_COMPARE_WARNED=0
 
-LAST_CPU_SECONDS=""
-IDLE_BEATS=0
-EVER_STUCK=0
-
-
 beat() {
+
   local elapsed_fmt
   elapsed_fmt="$(format_elapsed "$1")"
   local phrase="hey - still here, btw"
@@ -707,35 +832,10 @@ write_status "${TAG} ${FINAL_STATE} after ${ELAPSED_FMT} (exit code ${EXIT_CODE}
 write_registry "$FINAL_STATE" "$ELAPSED" "$EXIT_CODE"
 send_webhook "finished" "Command finished after ${ELAPSED_FMT} with exit code ${EXIT_CODE}" "$FINAL_STATE" "$ELAPSED" "$EXIT_CODE"
 
-
-
-if [[ "$HISTORY" -eq 1 ]]; then
-  if command -v sqlite3 >/dev/null 2>&1; then
-    mkdir -p "$(dirname "$HISTORY_DB")" 2>/dev/null
-    # SQLite quoting: double any single quotes in free-text fields.
-    ESCAPED_CMD="$(printf '%s' "$*" | sed "s/'/''/g")"
-    ESCAPED_LABEL="$(printf '%s' "$LABEL" | sed "s/'/''/g")"
-    sqlite3 "$HISTORY_DB" <<SQL 2>/dev/null
-CREATE TABLE IF NOT EXISTS runs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  label TEXT,
-  command TEXT,
-  start_ts INTEGER,
-  end_ts INTEGER,
-  elapsed_seconds INTEGER,
-  exit_code INTEGER,
-  stuck_detected INTEGER
-);
-INSERT INTO runs (label, command, start_ts, end_ts, elapsed_seconds, exit_code, stuck_detected)
-VALUES ('${ESCAPED_LABEL}', '${ESCAPED_CMD}', ${START_TS}, ${NOW}, ${ELAPSED}, ${EXIT_CODE}, ${EVER_STUCK});
-SQL
-    echo "${TAG} Run logged to history: ${HISTORY_DB}"
-  else
-    echo "${TAG} --history requested but 'sqlite3' CLI not found - skipping history logging." >&2
-  fi
-fi
+log_history "$EXIT_CODE" "$ELAPSED" "$NOW" "$EVER_STUCK"
 
 echo "${TAG} --- Output of wrapped command ---"
+
 cat "$LOG_FILE"
 rm -f "$LOG_FILE"
 
