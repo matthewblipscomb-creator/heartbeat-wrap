@@ -1,0 +1,171 @@
+name: 'heartbeat-wrap'
+description: >-
+  Wrap a long-running CI step with periodic heartbeat output, optional
+  CPU-idle stuck-detection, and optional webhook notifications (Slack/
+  Discord/generic) — so a step that's slow-but-fine never gets confused
+  with one that's truly hung, straight from your workflow logs.
+author: 'Matthew Lipscomb'
+branding:
+  icon: 'activity'
+  color: 'orange'
+
+inputs:
+  command:
+    description: >-
+      The shell command to run, wrapped with heartbeat_wrap.sh. Executed
+      via `bash -c "<command>"`, so pipes/&&/quoting all work exactly like
+      a normal `run:` step.
+    required: true
+  interval:
+    description: 'Heartbeat interval in seconds.'
+    required: false
+    default: '30'
+  label:
+    description: >-
+      Label tag shown in every heartbeat line and used to key
+      --history-compare if history is enabled. Defaults to the job name
+      when not set explicitly.
+    required: false
+    default: 'ci'
+  immediate:
+    description: 'Set to "true" to print the first heartbeat immediately instead of waiting a full interval.'
+    required: false
+    default: 'true'
+  stuck-detect:
+    description: >-
+      Set to "true" to enable the CPU-idle stuck-detection heuristic
+      (warns if the wrapped process's CPU time hasn't advanced for
+      stuck-threshold consecutive beats). Heuristic only — a step can be
+      idle-CPU but legitimately waiting on slow disk/network I/O.
+    required: false
+    default: 'false'
+  stuck-threshold:
+    description: 'Consecutive idle beats before a stuck warning fires (used with stuck-detect).'
+    required: false
+    default: '3'
+  history:
+    description: >-
+      Set to "true" to log this run to a local SQLite history DB on the
+      runner. Note: GitHub-hosted runners are ephemeral, so this DB does
+      not persist between workflow runs unless you separately cache/
+      restore ~/.heartbeat_wrap/history.db (e.g. via actions/cache)
+      yourself — most CI users will want history-compare disabled unless
+      they've set that up.
+    required: false
+    default: 'false'
+  history-compare:
+    description: >-
+      Set to "true" to also warn if this run's elapsed time exceeds the
+      historical average (by history-compare-multiplier) for this label,
+      pulled from the same history DB. Implies history: true. Requires a
+      persisted/restored history DB across runs to be useful (see above).
+    required: false
+    default: 'false'
+  history-compare-multiplier:
+    description: 'How many times slower than the historical average triggers the history-compare warning.'
+    required: false
+    default: '2'
+  webhook:
+    description: >-
+      Optional URL to POST a JSON payload to when the step finishes (and
+      on a stuck warning too, if webhook-on-stuck is also true). Handy
+      for a Slack/Discord channel ping straight from CI without any
+      third-party GitHub Action.
+    required: false
+    default: ''
+  webhook-format:
+    description: 'Shape of the webhook payload: generic, slack, or discord.'
+    required: false
+    default: 'generic'
+  webhook-on-stuck:
+    description: 'Set to "true" to also POST to webhook the moment a stuck warning fires (requires stuck-detect: true too).'
+    required: false
+    default: 'false'
+  fail-on-stuck:
+    description: >-
+      Set to "true" to fail this action step immediately (without
+      waiting for the wrapped command to finish on its own) the first
+      time a stuck warning fires. Off by default since a stuck warning
+      is only a heuristic, not proof — most users will want to just be
+      notified (via webhook-on-stuck and/or reading the log) and decide
+      manually whether to cancel the workflow run.
+    required: false
+    default: 'false'
+  extra-args:
+    description: >-
+      Any additional raw heartbeat_wrap.sh flags to pass through
+      verbatim (e.g. "--fun --message 'brewing coffee'"). Word-split on
+      whitespace — do not rely on this for arguments containing spaces
+      inside quotes; use the dedicated inputs above wherever one exists.
+    required: false
+    default: ''
+
+outputs:
+  exit-code:
+    description: 'The exit code of the wrapped command.'
+    value: ${{ steps.run.outputs.exit_code }}
+  stuck-detected:
+    description: '"true" if a stuck warning ever fired during this run, "false" otherwise.'
+    value: ${{ steps.run.outputs.stuck_detected }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Run command under heartbeat_wrap
+      id: run
+      shell: bash
+      run: |
+        set -uo pipefail
+        chmod +x "${{ github.action_path }}/heartbeat_wrap.sh"
+
+        ARGS=(--interval "${{ inputs.interval }}" --label "${{ inputs.label }}" --no-dashboard)
+
+        if [[ "${{ inputs.immediate }}" == "true" ]]; then
+          ARGS+=(--immediate)
+        fi
+        if [[ "${{ inputs.stuck-detect }}" == "true" ]]; then
+          ARGS+=(--stuck-detect --stuck-threshold "${{ inputs.stuck-threshold }}")
+        fi
+        if [[ "${{ inputs.history }}" == "true" || "${{ inputs.history-compare }}" == "true" ]]; then
+          ARGS+=(--history)
+        fi
+        if [[ "${{ inputs.history-compare }}" == "true" ]]; then
+          ARGS+=(--history-compare --history-compare-multiplier "${{ inputs.history-compare-multiplier }}")
+        fi
+        if [[ -n "${{ inputs.webhook }}" ]]; then
+          ARGS+=(--webhook "${{ inputs.webhook }}" --webhook-format "${{ inputs.webhook-format }}")
+          if [[ "${{ inputs.webhook-on-stuck }}" == "true" ]]; then
+            ARGS+=(--webhook-on-stuck)
+          fi
+        fi
+        if [[ -n "${{ inputs.extra-args }}" ]]; then
+          # Intentional word-splitting on user-supplied extra flags -
+          # see the "extra-args" input description above for the caveat.
+          # shellcheck disable=SC2206
+          EXTRA=(${{ inputs.extra-args }})
+          ARGS+=("${EXTRA[@]}")
+        fi
+
+        LOG_TMP="$(mktemp)"
+        set +e
+        "${{ github.action_path }}/heartbeat_wrap.sh" "${ARGS[@]}" -- bash -c "${{ inputs.command }}" 2>&1 | tee "$LOG_TMP"
+        EXIT_CODE=${PIPESTATUS[0]}
+        set -e
+
+        STUCK="false"
+        if grep -q "possibly stuck" "$LOG_TMP" 2>/dev/null; then
+          STUCK="true"
+        fi
+        rm -f "$LOG_TMP"
+
+        {
+          echo "exit_code=${EXIT_CODE}"
+          echo "stuck_detected=${STUCK}"
+        } >> "$GITHUB_OUTPUT"
+
+        if [[ "${STUCK}" == "true" && "${{ inputs.fail-on-stuck }}" == "true" && "${EXIT_CODE}" -eq 0 ]]; then
+          echo "::error::heartbeat-wrap: stuck warning fired and fail-on-stuck is enabled, but the wrapped command still exited 0 (it finished on its own before this action could intervene mid-run — fail-on-stuck only affects the summary/exit here, it cannot pre-emptively kill a step that already completed)."
+          exit 1
+        fi
+
+        exit "${EXIT_CODE}"

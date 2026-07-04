@@ -1,0 +1,78 @@
+name: heartbeat-wrap example
+
+# Demonstrates using this repo's own composite action (./.) to wrap a CI
+# step. Not part of a release/publish pipeline — this is a runnable,
+# living example you (or anyone browsing the repo) can point to, and a
+# quick manual smoke test via workflow_dispatch.
+#
+# Local note: GitHub Actions itself can't be executed on this machine —
+# this file is validated by eye / YAML-lint only until it's pushed and
+# run for real on GitHub's runners.
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'action.yml'
+      - 'heartbeat_wrap.sh'
+      - '.github/workflows/example.yml'
+
+jobs:
+  fast-command:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Quick command with a heartbeat every 5s
+        id: quick
+        uses: ./
+        with:
+          command: 'sleep 12 && echo "quick step done"'
+          interval: '5'
+          label: 'quick-demo'
+
+      - name: Show outputs
+        run: |
+          echo "exit-code: ${{ steps.quick.outputs.exit-code }}"
+          echo "stuck-detected: ${{ steps.quick.outputs.stuck-detected }}"
+
+  stuck-detect-demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `sleep` reports essentially zero CPU time the whole way through,
+      # so this deliberately trips the stuck-detect heuristic on a
+      # perfectly healthy step - a good sanity check that stuck-detect
+      # actually fires, without needing a real hang to demonstrate it.
+      - name: Command that looks "stuck" by CPU-idle heuristic (sleep)
+        id: stuck_demo
+        uses: ./
+        with:
+          command: 'sleep 20'
+          interval: '4'
+          stuck-detect: 'true'
+          stuck-threshold: '2'
+
+      - name: Confirm stuck-detected output was set
+        run: |
+          echo "stuck-detected: ${{ steps.stuck_demo.outputs.stuck-detected }}"
+          if [[ "${{ steps.stuck_demo.outputs.stuck-detected }}" != "true" ]]; then
+            echo "::warning::Expected stuck-detected=true for a plain 'sleep' command - heuristic behavior may have changed."
+          fi
+
+  webhook-demo:
+    # Only meaningful once a real webhook secret is configured on the
+    # repo; skipped entirely otherwise so this workflow doesn't fail for
+    # forks/clones that haven't set one up.
+    runs-on: ubuntu-latest
+    if: ${{ vars.HEARTBEAT_WRAP_DEMO_WEBHOOK_URL != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Command with a Slack-formatted webhook on completion
+        uses: ./
+        with:
+          command: 'echo "hello from CI"'
+          webhook: ${{ vars.HEARTBEAT_WRAP_DEMO_WEBHOOK_URL }}
+          webhook-format: 'slack'

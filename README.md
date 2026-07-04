@@ -185,7 +185,31 @@ Delivery uses a 10-second `curl` timeout and never blocks or fails the
 wrapped command itself — a dead/unreachable webhook endpoint only ever
 prints a warning to stderr.
 
+## GitHub Actions
+
+This repo also ships as a self-contained composite GitHub Action
+(`action.yml` at the repo root) — no vendoring or extra checkout step
+needed, just point `uses:` at this repo:
+
+```yaml
+- name: Run the slow thing, with a heartbeat every 30s
+  uses: matthewblipscomb-creator/heartbeat-wrap@v1   # pin a real tag once one exists
+  with:
+    command: './run_migrations.sh'
+    label: 'migrations'
+    stuck-detect: 'true'
+    webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+    webhook-format: 'slack'
+```
+
+Full input/output reference, recipes (Slack-on-finish, Slack-on-stuck,
+persisting history across ephemeral runners), and CI-specific caveats
+live in **[docs/GITHUB_ACTIONS.md](./docs/GITHUB_ACTIONS.md)**. A
+runnable example workflow is at
+[`.github/workflows/example.yml`](./.github/workflows/example.yml).
+
 ## Install
+
 
 There's nothing to install. Just download `heartbeat_wrap.sh`, make it
 executable, and run it:
@@ -230,15 +254,23 @@ tools above. What's left below is still being considered for a
 **separate, optional companion product** (working name: `heartbeat_wrap
 Pro`), not gating features out of the free script:
 
-- **Agent/CI native integration** — ✅ **shipped** as a small MCP server
-  (`Cline/MCP/heartbeat-wrap-server/`) that exposes `start_heartbeat_job`,
-  `check_heartbeat_job`, `wait_for_heartbeat_job`, and `list_heartbeat_jobs`
-  as MCP tools. This lets an AI coding agent (e.g. Cline) start a
-  long-running command in the background and return immediately with a
-  `job_id`, then poll it non-blockingly instead of holding a terminal
-  hostage for the whole duration — exactly the workflow this whole project
-  was originally built to support by hand. A general CI-plugin form (e.g.
-  a GitHub Actions step) is still just an idea and not built yet.
+- **Agent/CI native integration** — ✅ **shipped**, two ways:
+  - A small MCP server (`Cline/MCP/heartbeat-wrap-server/`) that exposes
+    `start_heartbeat_job`, `check_heartbeat_job`, `wait_for_heartbeat_job`,
+    and `list_heartbeat_jobs` as MCP tools. This lets an AI coding agent
+    (e.g. Cline) start a long-running command in the background and
+    return immediately with a `job_id`, then poll it non-blockingly
+    instead of holding a terminal hostage for the whole duration —
+    exactly the workflow this whole project was originally built to
+    support by hand.
+  - A self-contained composite **GitHub Action** (`action.yml` at the
+    repo root) for wrapping a step in a CI workflow you already have,
+    with optional stuck-detection and Slack/Discord/generic webhook
+    notifications straight from CI. See the
+    [GitHub Actions section](#github-actions) above and
+    [docs/GITHUB_ACTIONS.md](./docs/GITHUB_ACTIONS.md) for the full
+    reference.
+
 
 None of this is committed or funded yet — it's a backlog of ideas from
 treating this as a real product, not just a script. Feedback/PRs on which
