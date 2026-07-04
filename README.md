@@ -252,7 +252,7 @@ This script is free and always will be. That said, if it ever saved you
 from an unnecessary restart, a wasted hour, or a wasted AI/agent session
 credit — a small tip is genuinely appreciated (never required):
 
-👉 **[Add your donation link here — e.g. Buy Me a Coffee / GitHub
-Sponsors / Ko-fi / PayPal.me]**
+👉 **[Donate via PayPal](https://paypal.me/matthewlipscomb743)**
+
 
 Issues, improvements, and pull requests are welcome.
