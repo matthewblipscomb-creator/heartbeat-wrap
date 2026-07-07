@@ -41,12 +41,31 @@ produce a hang when driven non-interactively by an agent. See
 to each one, with concrete fixes.
 
 
+### Install the shell-safety rules directly into your AI agent
+
+Rather than just reading about the hang classes above, you can actually
+install them as an enforceable rules block into your agent's own rules file
+(`.clinerules`, `.cursorrules`, `CLAUDE.md`, `AGENTS.md`) with one command:
+
+```bash
+./install_agent_rules.sh              # auto-detects the right file in cwd
+./install_agent_rules.sh --dry-run     # preview without writing
+./install_agent_rules.sh --target /path/to/AGENTS.md
+./install_agent_rules.sh --list-targets
+```
+
+It's idempotent (detects its own marker and skips on re-run) and never uses
+a heredoc to do the appending — see
+[docs/AGENT_SHELL_HANGS.md](./docs/AGENT_SHELL_HANGS.md) for why that
+matters here specifically.
+
 `heartbeat_wrap.sh` fixes this by running your real command in the
 background and printing a live heartbeat line to your terminal at a
 regular interval for as long as it's alive, optionally paired with a
 desktop notification, terminal bell, and/or a persistent status file you
 can watch from anywhere. No dependencies beyond bash + coreutils, which is
 every Mac and Linux machine out of the box.
+
 
 ## Usage
 

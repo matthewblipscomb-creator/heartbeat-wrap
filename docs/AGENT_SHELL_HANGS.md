@@ -15,6 +15,14 @@ non-interactive shell execution works in general. `heartbeat_wrap.sh`'s
 the rest are avoidance patterns to build into the calling agent/workflow
 itself.
 
+**Don't just read this — install it.** Run `./install_agent_rules.sh` from
+the repo root to write an enforceable, condensed version of these rules
+directly into your agent's own rules file (`.clinerules`, `.cursorrules`,
+`CLAUDE.md`, `AGENTS.md`), instead of relying on the agent to have read
+this doc. See the "Install the shell-safety rules directly into your AI
+agent" section of the [README](../README.md#install-the-shell-safety-rules-directly-into-your-ai-agent).
+
+
 ---
 
 ## 1. Multi-line quoted strings → `dquote>` / `quote>` / `cmdquote>`
