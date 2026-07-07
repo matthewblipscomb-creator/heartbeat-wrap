@@ -91,6 +91,26 @@ inputs:
       manually whether to cancel the workflow run.
     required: false
     default: 'false'
+  stuck-kill:
+    description: >-
+      ⚠️ Use with caution — see the risk warning in README.md. Set to
+      "true" to actually terminate the wrapped command (SIGTERM, then
+      SIGKILL after a 1s grace period) the moment the stuck heuristic
+      fires, instead of only warning. Implies stuck-detect: true. The
+      step will then exit 124. Off by default; only enable for commands
+      that are safe to interrupt mid-run.
+    required: false
+    default: 'false'
+  lint-strict:
+    description: >-
+      Set to "true" to statically check the command for unbalanced
+      quotes and unterminated heredocs before running it, and fail this
+      step immediately (without running the command at all) if anything
+      is flagged. Most useful when command is built dynamically from
+      other step outputs/expressions rather than a fixed literal string.
+    required: false
+    default: 'false'
+
   extra-args:
     description: >-
       Any additional raw heartbeat_wrap.sh flags to pass through
@@ -126,6 +146,13 @@ runs:
         if [[ "${{ inputs.stuck-detect }}" == "true" ]]; then
           ARGS+=(--stuck-detect --stuck-threshold "${{ inputs.stuck-threshold }}")
         fi
+        if [[ "${{ inputs.stuck-kill }}" == "true" ]]; then
+          ARGS+=(--stuck-kill --stuck-threshold "${{ inputs.stuck-threshold }}")
+        fi
+        if [[ "${{ inputs.lint-strict }}" == "true" ]]; then
+          ARGS+=(--lint-strict)
+        fi
+
         if [[ "${{ inputs.history }}" == "true" || "${{ inputs.history-compare }}" == "true" ]]; then
           ARGS+=(--history)
         fi

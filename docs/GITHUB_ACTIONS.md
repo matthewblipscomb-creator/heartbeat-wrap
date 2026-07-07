@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run the slow thing, with a heartbeat every 30s
-        uses: matthewblipscomb-creator/heartbeat-wrap@v1   # pin a real tag once one exists
+        uses: matthewblipscomb-creator/heartbeat-wrap@v2   # tagged release, see ../CHANGELOG.md
         with:
           command: './run_migrations.sh'
           label: 'migrations'
@@ -53,6 +53,8 @@ the most useful ones:
 | `webhook-format` | `generic` | `generic`, `slack`, or `discord` payload shape |
 | `webhook-on-stuck` | `false` | Also fire the webhook the moment a stuck warning triggers |
 | `fail-on-stuck` | `false` | See [caveat](#fail-on-stuck-caveat) below before enabling |
+| `stuck-kill` | `false` | ⚠️ Actually terminates the wrapped step's process on a stuck-heuristic match instead of only warning — see the risk warning in the main [README](../README.md). Implies `stuck-detect` |
+| `lint-strict` | `false` | Statically check `command` for unbalanced quotes / unterminated heredocs before running it, and fail the step immediately if anything is flagged. Most useful when `command` is built dynamically |
 | `history` / `history-compare` | `false` | See [history across ephemeral runners](#history-across-ephemeral-runners) below |
 | `extra-args` | *(none)* | Any other raw `heartbeat_wrap.sh` flag not covered above (e.g. `--fun`) |
 
@@ -66,7 +68,7 @@ the most useful ones:
 ```yaml
       - name: Run with an id so we can read its outputs
         id: mystep
-        uses: matthewblipscomb-creator/heartbeat-wrap@v1
+        uses: matthewblipscomb-creator/heartbeat-wrap@v2
         with:
           command: './slow_script.sh'
           stuck-detect: 'true'
@@ -81,7 +83,7 @@ the most useful ones:
 ### Ping Slack the moment a step finishes
 
 ```yaml
-      - uses: matthewblipscomb-creator/heartbeat-wrap@v1
+      - uses: matthewblipscomb-creator/heartbeat-wrap@v2
         with:
           command: './deploy.sh'
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -91,7 +93,7 @@ the most useful ones:
 ### Ping Slack immediately if a step looks stuck, without waiting for it to finish
 
 ```yaml
-      - uses: matthewblipscomb-creator/heartbeat-wrap@v1
+      - uses: matthewblipscomb-creator/heartbeat-wrap@v2
         with:
           command: './long_running_build.sh'
           interval: '60'
@@ -105,7 +107,7 @@ the most useful ones:
 ### Pass through any flag not covered by a dedicated input
 
 ```yaml
-      - uses: matthewblipscomb-creator/heartbeat-wrap@v1
+      - uses: matthewblipscomb-creator/heartbeat-wrap@v2
         with:
           command: './backup.sh'
           extra-args: '--fun --message "backing up, hang tight"'
@@ -160,7 +162,7 @@ yet" unless you separately persist and restore that file yourself, e.g.:
           key: heartbeat-wrap-history-${{ github.job }}
           restore-keys: heartbeat-wrap-history-
 
-      - uses: matthewblipscomb-creator/heartbeat-wrap@v1
+      - uses: matthewblipscomb-creator/heartbeat-wrap@v2
         with:
           command: './run_migrations.sh'
           label: 'migrations'

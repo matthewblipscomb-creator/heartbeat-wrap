@@ -4,6 +4,17 @@
 and prints a periodic "hey - still here, btw" heartbeat, so you know
 it's working and not hung.**
 
+> ⚠️ **Use at your own risk.** Provided AS IS, no warranty (see
+> [LICENSE](./LICENSE)). Most of this tool only ever observes/reports —
+> it changes nothing about your wrapped command. The one exception is
+> `--stuck-kill` (off by default, see below): it will forcibly terminate
+> the process you wrap based on a *heuristic* (no CPU progress for N
+> beats), which can be wrong for a process that's idle-CPU but
+> legitimately waiting on slow disk/network I/O. Killing a process at
+> the wrong instant can leave partial/corrupted output behind — only
+> enable it for commands that are safe to interrupt, and keep backups of
+> anything important either way.
+
 ## Why this exists
 
 If you've ever run a slow `grep`, a big `rsync`, a database migration, or
@@ -53,6 +64,10 @@ heartbeat_wrap.sh [OPTIONS] -- <command> [args...]
 | `--webhook URL` | POST a JSON payload to `URL` when the wrapped command finishes (DONE or FAILED). Requires `curl`; a delivery failure (missing curl, network error, non-2xx) is only ever printed as a warning — it never affects the wrapped command's exit code |
 | `--webhook-format FMT` | Shape of the JSON payload sent to `--webhook`. One of `generic` (full JSON snapshot, default), `slack` (single `text` field, Slack incoming-webhook compatible), `discord` (single `content` field, Discord webhook compatible) |
 | `--webhook-on-stuck` | Also POST to `--webhook` every time a "possibly stuck" warning fires (requires `--stuck-detect` too — this flag alone does nothing) |
+| `--lint` | Best-effort static check for unbalanced quotes (via bash's own parser) and unterminated heredocs (via a dedicated delimiter scanner) in the wrapped command before running it — warns only, still runs the command either way |
+| `--lint-strict` | Same check as `--lint`, but refuses to run the wrapped command at all if anything is flagged (exits `2`). Implies `--lint` |
+| `--stuck-kill` | ⚠️ See the risk warning above. Implies `--stuck-detect`. Instead of only warning when the stuck heuristic fires, actually terminates the wrapped command (`SIGTERM`, then `SIGKILL` after a 1s grace period) and exits `124` (matching the conventional `timeout` exit code). Off by default |
+| `-V`, `--version` | Print the version number and exit |
 | `-h`, `--help` | Show usage |
 
 **Always include a literal `--`** before your real command, so this
@@ -193,7 +208,7 @@ needed, just point `uses:` at this repo:
 
 ```yaml
 - name: Run the slow thing, with a heartbeat every 30s
-  uses: matthewblipscomb-creator/heartbeat-wrap@v1   # pin a real tag once one exists
+  uses: matthewblipscomb-creator/heartbeat-wrap@v2   # tagged release, see CHANGELOG.md
   with:
     command: './run_migrations.sh'
     label: 'migrations'
@@ -242,6 +257,9 @@ MIT — see [LICENSE](./LICENSE). Free to use, modify, and share, forever,
 no strings attached. This is the "coffeeware" tier: fully-featured,
 no paywall, no telemetry.
 
+Current version: **2.0.0** — see [CHANGELOG.md](./CHANGELOG.md) for
+release notes, or run `heartbeat_wrap.sh --version`.
+
 ## Roadmap / Pro tier ideas
 
 The free script above intentionally stays a single dependency-free bash
@@ -276,9 +294,19 @@ None of this is committed or funded yet — it's a backlog of ideas from
 treating this as a real product, not just a script. Feedback/PRs on which
 of these would actually be worth paying for are welcome.
 
-
+**Also planned (future, not started):** a three-tier (Small/Medium/Large)
+promotion strategy for the project itself — see
+[docs/MARKETING_CAMPAIGN_STRATEGY.md](./docs/MARKETING_CAMPAIGN_STRATEGY.md).
+Sequenced from $0/organic (Show HN, Reddit, the Cline community, `awesome-*`
+list PRs) up through a modest paid push (Product Hunt, a niche newsletter
+sponsorship, GitHub Sponsors tiers) to a larger ongoing motion (podcast/
+newsletter sponsorship, content marketing, a paid creator demo) — each tier
+gated on the previous one actually showing real signal first. Not scheduled
+against any date; revisit whenever there's time/appetite to run the Small
+tier.
 
 ## Support this project
+
 
 This script is free and always will be. That said, if it ever saved you
 from an unnecessary restart, a wasted hour, or a wasted AI/agent session
