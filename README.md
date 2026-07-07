@@ -33,6 +33,14 @@ while it's running, both to the tool and often to you. That ambiguity leads
 to a very common, very avoidable habit: killing the terminal and restarting
 the whole task, "just in case" — even when nothing was actually wrong.
 
+That's the *visibility* half of the problem. The other half is *root
+cause* — a handful of specific, generic shell behaviors (heredocs,
+multi-line quoted strings, hidden stdin prompts, etc.) that reliably
+produce a hang when driven non-interactively by an agent. See
+[docs/AGENT_SHELL_HANGS.md](./docs/AGENT_SHELL_HANGS.md) for a field guide
+to each one, with concrete fixes.
+
+
 `heartbeat_wrap.sh` fixes this by running your real command in the
 background and printing a live heartbeat line to your terminal at a
 regular interval for as long as it's alive, optionally paired with a
