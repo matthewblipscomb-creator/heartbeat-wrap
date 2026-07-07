@@ -57,7 +57,11 @@ install them as an enforceable rules block into your agent's own rules file
 It's idempotent (detects its own marker and skips on re-run) and never uses
 a heredoc to do the appending — see
 [docs/AGENT_SHELL_HANGS.md](./docs/AGENT_SHELL_HANGS.md) for why that
-matters here specifically.
+matters here specifically. Requires bash (same as `heartbeat_wrap.sh`
+itself) — on Windows, run it from Git Bash or WSL. Verified working
+(all 4 modes: list/dry-run/install/idempotent-skip) on both macOS bash 3.2
+and a real Windows 10 machine via its bundled Git Bash.
+
 
 `heartbeat_wrap.sh` fixes this by running your real command in the
 background and printing a live heartbeat line to your terminal at a
